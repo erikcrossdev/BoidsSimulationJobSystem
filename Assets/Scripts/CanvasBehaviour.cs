@@ -11,6 +11,7 @@ public class CanvasBehaviour : MonoBehaviour
 	[SerializeField] UnityEngine.UI.Slider _alignmentWeightSlider;
 	[SerializeField] UnityEngine.UI.Slider _cohesionWeightSlider;
 	[SerializeField] UnityEngine.UI.Slider _playerEffectWeightSlider;
+	[SerializeField] UnityEngine.UI.Slider _maxNeighbors;
 	[SerializeField] UnityEngine.UI.Toggle _shouldAvoidPlayerToggle;
 	[SerializeField] UnityEngine.UI.Slider _lookAhead;
 	[SerializeField] UnityEngine.UI.Button ToggleButton;
@@ -31,6 +32,7 @@ public class CanvasBehaviour : MonoBehaviour
 		_cohesionWeightSlider.onValueChanged.AddListener(_boids.OnChangeCohesionWeight);
 		_playerEffectWeightSlider.onValueChanged.AddListener(_boids.OnChangePlayerEffectWeight);
 		_shouldAvoidPlayerToggle.onValueChanged.AddListener(_boids.OnChangeShouldAvoidPlayer);
+		_maxNeighbors.onValueChanged.AddListener(_boids.OnChangeMaxNeighbors);
 		_lookAhead.onValueChanged.AddListener(_boids.OnChangeLookAhead);
 
 		ToggleButton.onClick.AddListener(OnToggle);

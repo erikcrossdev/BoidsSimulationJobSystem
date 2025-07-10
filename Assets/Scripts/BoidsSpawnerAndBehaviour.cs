@@ -23,9 +23,8 @@ public class BoidsSpawnerAndBehaviour : MonoBehaviour
 	[SerializeField] float _centerPullWeight = 1f;
 	[SerializeField] bool _shouldAvoidPlayer = true;
 	[SerializeField] float _lookAhead = 0.2f;
-	public float LookAhead => _lookAhead;
 
-
+	[SerializeField] int _maxNeighbors = 15;
 
 	[Header("Boid Behavior")]
 	[SerializeField] private float _moveSpeed = 5f;
@@ -43,6 +42,10 @@ public class BoidsSpawnerAndBehaviour : MonoBehaviour
 	public float AlignmentWeight => _alignmentWeight;
 	public float CohesionWeight => _cohesionWeight;
 	public float PlayerEffectWeight => _playerEffectWeight;
+
+	public float LookAhead => _lookAhead;
+
+	public int MaxNeighbors => _maxNeighbors;
 
 	private TransformAccessArray _accessArray;
 	private NativeArray<float3> _positions;
@@ -63,6 +66,11 @@ public class BoidsSpawnerAndBehaviour : MonoBehaviour
 	public void OnChangeLookAhead(float param)
 	{
 		_lookAhead = param;
+	}
+
+	public void OnChangeMaxNeighbors(float param)
+	{
+		_maxNeighbors = (int)param;
 	}
 	public void OnChangeNeighborDistance(float param)
 	{
@@ -167,7 +175,7 @@ public class BoidsSpawnerAndBehaviour : MonoBehaviour
 				(boundsMin.y + boundsMax.y) / 2f,
 				0f),
 			CenterPullWeight = _centerPullWeight,
-			MaxNeighbors = 15,
+			MaxNeighbors = _maxNeighbors,
 			LookAheadTime = _lookAhead,
 			Randoms = _randoms
 

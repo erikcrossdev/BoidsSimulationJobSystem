@@ -12,6 +12,7 @@ public class CanvasBehaviour : MonoBehaviour
 	[SerializeField] UnityEngine.UI.Slider _cohesionWeightSlider;
 	[SerializeField] UnityEngine.UI.Slider _playerEffectWeightSlider;
 	[SerializeField] UnityEngine.UI.Toggle _shouldAvoidPlayerToggle;
+	[SerializeField] UnityEngine.UI.Slider _lookAhead;
 	[SerializeField] UnityEngine.UI.Button ToggleButton;
 	[SerializeField] TextMeshProUGUI ButtonLabel;
 	[SerializeField] GameObject Root;
@@ -30,6 +31,7 @@ public class CanvasBehaviour : MonoBehaviour
 		_cohesionWeightSlider.onValueChanged.AddListener(_boids.OnChangeCohesionWeight);
 		_playerEffectWeightSlider.onValueChanged.AddListener(_boids.OnChangePlayerEffectWeight);
 		_shouldAvoidPlayerToggle.onValueChanged.AddListener(_boids.OnChangeShouldAvoidPlayer);
+		_lookAhead.onValueChanged.AddListener(_boids.OnChangeLookAhead);
 
 		ToggleButton.onClick.AddListener(OnToggle);
 
@@ -41,6 +43,7 @@ public class CanvasBehaviour : MonoBehaviour
 		_cohesionWeightSlider.value = _boids.CohesionWeight;
 		_playerEffectWeightSlider.value = _boids.PlayerEffectWeight;
 		_shouldAvoidPlayerToggle.isOn = _boids.ShouldAvoidPlayer;
+		_lookAhead.value = _boids.LookAhead;
 
 		OnToggle();
 	}

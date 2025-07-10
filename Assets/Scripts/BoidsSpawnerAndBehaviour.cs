@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using Unity.Burst;
 using Unity.Collections;
@@ -21,6 +22,8 @@ public class BoidsSpawnerAndBehaviour : MonoBehaviour
 	[SerializeField] private Vector2 boundsMax = new Vector2(10, 5);
 	[SerializeField] float _centerPullWeight = 1f;
 	[SerializeField] bool _shouldAvoidPlayer = true;
+	[SerializeField] float _lookAhead = 0.2f;
+	public float LookAhead => _lookAhead;
 
 
 
@@ -32,7 +35,6 @@ public class BoidsSpawnerAndBehaviour : MonoBehaviour
 	[SerializeField] private float _cohesionWeight = 1f;
 	[SerializeField] private float _playerEffectWeight = 0.8f;
 
-	private NativeArray<byte> _flipXs; //flip sprite or not
 	public float CenterPullWeight => _centerPullWeight;
 	public bool ShouldAvoidPlayer => _shouldAvoidPlayer;
 	public float MoveSpeed => _moveSpeed;
@@ -46,12 +48,21 @@ public class BoidsSpawnerAndBehaviour : MonoBehaviour
 	private NativeArray<float3> _positions;
 	private NativeArray<float3> _velocities;
 	private NativeArray<float3> _newVelocities;
+
+	[NativeDisableParallelForRestriction]
+	private NativeArray<Unity.Mathematics.Random> _randoms;
+
 	private SpriteRenderer[] _spriteRenderers;
 
 	private List<GameObject> _boids = new List<GameObject>();
 
-	public void OnChangeMoveSpeed(float param) {
+	public void OnChangeMoveSpeed(float param)
+	{
 		_moveSpeed = param;
+	}
+	public void OnChangeLookAhead(float param)
+	{
+		_lookAhead = param;
 	}
 	public void OnChangeNeighborDistance(float param)
 	{
@@ -83,7 +94,8 @@ public class BoidsSpawnerAndBehaviour : MonoBehaviour
 		_centerPullWeight = param;
 	}
 
-	private void GetCameraBounds() {
+	private void GetCameraBounds()
+	{
 		Camera cam = Camera.main;
 		float camHeight = 2f * cam.orthographicSize;
 		float camWidth = camHeight * cam.aspect;
@@ -96,10 +108,17 @@ public class BoidsSpawnerAndBehaviour : MonoBehaviour
 	{
 		_playerPosition = PlayerBehaviour.instance.transform;
 		GetCameraBounds();
+		//set randoms: 
+		_randoms = new NativeArray<Unity.Mathematics.Random>(_numberOfBoidsToSpawn, Allocator.Persistent);
+		uint seed = (uint)UnityEngine.Random.Range(1, 100000);
+		for (int i = 0; i < _numberOfBoidsToSpawn; i++)
+		{
+			_randoms[i] = new Unity.Mathematics.Random(seed + (uint)i + 1);
+		}
+
 		Transform[] transforms = new Transform[_numberOfBoidsToSpawn];
 		_spriteRenderers = new SpriteRenderer[_numberOfBoidsToSpawn];
 
-		_flipXs = new NativeArray<byte>(_numberOfBoidsToSpawn, Allocator.Persistent);
 		_positions = new NativeArray<float3>(_numberOfBoidsToSpawn, Allocator.Persistent);
 		_velocities = new NativeArray<float3>(_numberOfBoidsToSpawn, Allocator.Persistent);
 		_newVelocities = new NativeArray<float3>(_numberOfBoidsToSpawn, Allocator.Persistent);
@@ -109,7 +128,7 @@ public class BoidsSpawnerAndBehaviour : MonoBehaviour
 			Vector2 spawnPos = UnityEngine.Random.insideUnitCircle * _spawnRadius;
 			GameObject boid = Instantiate(_boidPrefab, spawnPos, Quaternion.identity);
 			var sprite = boid.GetComponent<SpriteRenderer>();
-			sprite.sprite = _sprites[UnityEngine.Random.Range(0, _sprites.Length-1)];
+			sprite.sprite = _sprites[UnityEngine.Random.Range(0, _sprites.Length - 1)];
 			_boids.Add(boid);
 			transforms[i] = boid.transform;
 
@@ -139,16 +158,19 @@ public class BoidsSpawnerAndBehaviour : MonoBehaviour
 			AlignmentWeight = _alignmentWeight,
 			CohesionWeight = _cohesionWeight,
 			NeighborDistance = _neighborDistance,
-			MoveSpeed = _moveSpeed,			
+			MoveSpeed = _moveSpeed,
 			PlayerPos = _playerPosition.position,
-			PlayerEffectWeight = _playerEffectWeight, 
-			AvoidPlayer = _shouldAvoidPlayer, 
+			PlayerEffectWeight = _playerEffectWeight,
+			AvoidPlayer = _shouldAvoidPlayer,
 			BoundsCenter = new float3(
 				(boundsMin.x + boundsMax.x) / 2f,
 				(boundsMin.y + boundsMax.y) / 2f,
 				0f),
 			CenterPullWeight = _centerPullWeight,
-			MaxNeighbors = 15
+			MaxNeighbors = 15,
+			LookAheadTime = _lookAhead,
+			Randoms = _randoms
+
 		};
 
 		JobHandle behaviorHandle = behaviorJob.Schedule(_numberOfBoidsToSpawn, 64);
@@ -161,21 +183,12 @@ public class BoidsSpawnerAndBehaviour : MonoBehaviour
 			MinX = boundsMin.x,
 			MaxX = boundsMax.x,
 			MinY = boundsMin.y,
-			MaxY = boundsMax.y,
-			FlipXs = _flipXs
+			MaxY = boundsMax.y
 		};
 
 		JobHandle moveHandle = moveJob.Schedule(_accessArray, behaviorHandle);
 
 		moveHandle.Complete();
-
-		// flip boid sprite
-		for (int i = 0; i < _spriteRenderers.Length; i++)
-		{
-			bool shouldFlip = _flipXs[i] != 0;
-			if (_spriteRenderers[i].flipX != shouldFlip)
-				_spriteRenderers[i].flipX = shouldFlip;
-		}
 
 		// copy new velocities for the next frame
 		_velocities.CopyFrom(_newVelocities);
@@ -187,7 +200,7 @@ public class BoidsSpawnerAndBehaviour : MonoBehaviour
 		if (_positions.IsCreated) _positions.Dispose();
 		if (_velocities.IsCreated) _velocities.Dispose();
 		if (_newVelocities.IsCreated) _newVelocities.Dispose();
-		if (_flipXs.IsCreated) _flipXs.Dispose();
+		if (_randoms.IsCreated) _randoms.Dispose();
 	}
 }
 [BurstCompile]
@@ -197,10 +210,14 @@ public struct BoidBehaviorJob : IJobParallelFor
 	[ReadOnly] public NativeArray<float3> Velocities;
 	[ReadOnly] public float3 PlayerPos;
 	[ReadOnly] public float PlayerEffectWeight;
-	[ReadOnly] public bool AvoidPlayer; // true = run, false = follow
+	[ReadOnly] public bool AvoidPlayer;
 	[ReadOnly] public float3 BoundsCenter;
 	[ReadOnly] public float CenterPullWeight;
 	[ReadOnly] public int MaxNeighbors;
+	[ReadOnly] public float LookAheadTime;
+
+	[NativeDisableParallelForRestriction] // Permite leitura e escrita no Randoms
+	public NativeArray<Unity.Mathematics.Random> Randoms;
 
 	public NativeArray<float3> NewVelocities;
 
@@ -209,7 +226,6 @@ public struct BoidBehaviorJob : IJobParallelFor
 	public float CohesionWeight;
 	public float NeighborDistance;
 	public float MoveSpeed;
-
 
 	public void Execute(int index)
 	{
@@ -220,6 +236,8 @@ public struct BoidBehaviorJob : IJobParallelFor
 		float3 alignment = float3.zero;
 		float3 cohesion = float3.zero;
 
+		Unity.Mathematics.Random rand = Randoms[index];
+
 		int neighborCount = 0;
 
 		float3 playerDir = PlayerPos - currentPos;
@@ -227,12 +245,17 @@ public struct BoidBehaviorJob : IJobParallelFor
 			playerDir = math.normalize(playerDir);
 		else
 			playerDir = float3.zero;
-		if (AvoidPlayer)
-		{
-			playerDir = -playerDir; // direction to run
-		}
 
-		float NeighborDistanceSquared = NeighborDistance * NeighborDistance; //use this to avoid multiplying on the loop
+		if (AvoidPlayer) playerDir = -playerDir;
+
+		float NeighborDistanceSquared = NeighborDistance * NeighborDistance;
+		float NeighborDistanceSquaredOffset = NeighborDistanceSquared * 0.25f;
+
+		// Normaliza velocidade atual para previsão
+		float3 normCurrentVel = math.lengthsq(currentVel) > 0 ? math.normalize(currentVel) : float3.zero;
+
+		float3 predictedSelfPos = currentPos + normCurrentVel * MoveSpeed * LookAheadTime;
+
 		for (int i = 0; i < Positions.Length; i++)
 		{
 			if (i == index) continue;
@@ -249,10 +272,21 @@ public struct BoidBehaviorJob : IJobParallelFor
 				cohesion += otherPos;
 				neighborCount++;
 
-				if (neighborCount >= MaxNeighbors)
-					break;
-			}
+				// Previsão de posição do vizinho
+				float3 normOtherVel = math.lengthsq(Velocities[i]) > 0 ? math.normalize(Velocities[i]) : float3.zero;
+				float3 predictedOtherPos = otherPos + normOtherVel * MoveSpeed * LookAheadTime;
 
+				float3 predictedOffset = predictedSelfPos - predictedOtherPos;
+				float predictedDistSqr = math.lengthsq(predictedOffset);
+
+				if (predictedDistSqr < NeighborDistanceSquaredOffset && predictedDistSqr > 0)
+				{
+					float invPredDist = math.rsqrt(predictedDistSqr);
+					separation += predictedOffset * invPredDist * SeparationWeight; // Usa peso de separação
+				}
+
+				if (neighborCount >= MaxNeighbors) break;
+			}
 		}
 
 		if (neighborCount > 0)
@@ -261,6 +295,7 @@ public struct BoidBehaviorJob : IJobParallelFor
 			alignment = math.normalize(alignment / neighborCount);
 			cohesion = math.normalize((cohesion / neighborCount) - currentPos);
 		}
+
 		float3 toCenter = BoundsCenter - currentPos;
 		toCenter = math.normalize(toCenter);
 
@@ -268,12 +303,22 @@ public struct BoidBehaviorJob : IJobParallelFor
 		finalVel += separation * SeparationWeight;
 		finalVel += alignment * AlignmentWeight;
 		finalVel += cohesion * CohesionWeight;
-
-		finalVel = math.normalize(finalVel) * MoveSpeed;
 		finalVel += playerDir * PlayerEffectWeight;
 		finalVel += toCenter * CenterPullWeight;
 
+		if (math.lengthsq(finalVel) > 0)
+		{
+			finalVel = math.normalize(finalVel) * MoveSpeed;
+		}
+		else
+		{
+			float2 dir = rand.NextFloat2(-1f, 1f);
+			dir = math.normalize(dir);
+			finalVel = new float3(dir.x, dir.y, 0) * MoveSpeed;
+		}
+
 		NewVelocities[index] = finalVel;
+
 	}
 }
 
@@ -286,7 +331,6 @@ public struct BoidMoveJob : IJobParallelForTransform
 	[ReadOnly] public float MaxX;
 	[ReadOnly] public float MinY;
 	[ReadOnly] public float MaxY;
-	public NativeArray<byte> FlipXs;
 
 	public void Execute(int index, TransformAccess transform)
 	{
@@ -299,39 +343,43 @@ public struct BoidMoveJob : IJobParallelForTransform
 		float3 velocity = NewVelocities[index];
 		float3 newPos = (float3)transform.position + velocity * DeltaTime;
 
-
+		// Rebote nas X
 		if (newPos.x < safeMinX)
 		{
 			newPos.x = safeMinX;
-			if (velocity.x < 0) velocity.x *= -1;
+			velocity.x = math.abs(velocity.x); // força direita
 		}
-
-		if (newPos.x > safeMaxX)
+		else if (newPos.x > safeMaxX)
 		{
 			newPos.x = safeMaxX;
-			if (velocity.x > 0) velocity.x *= -1;
+			velocity.x = -math.abs(velocity.x); // força esquerda
 		}
+
+		// Rebote nas Y
 		if (newPos.y < safeMinY)
 		{
 			newPos.y = safeMinY;
-			if (velocity.y < 0) velocity.y *= -1;
+			velocity.y = math.abs(velocity.y); // força cima
 		}
-
-		if (newPos.y > safeMaxY)
+		else if (newPos.y > safeMaxY)
 		{
 			newPos.y = safeMaxY;
-			if (velocity.y > 0) velocity.y *= -1;
+			velocity.y = -math.abs(velocity.y); // força baixo
 		}
 
+		// Posiciona
 		transform.position = newPos;
 
-		if (math.lengthsq(velocity) > 0)
+		const float minSpeedSqr = 0.0001f; // ou outro valor pequeno adequado
+
+		if (math.lengthsq(velocity) > minSpeedSqr)
 		{
-			float angle = math.atan2(velocity.y, velocity.x);
-			transform.rotation = quaternion.AxisAngle(new float3(0, 0, 1), angle);
+			float angleRad = math.atan2(velocity.y, velocity.x);
+			angleRad += math.radians(180f);
+			transform.rotation = quaternion.AxisAngle(new float3(0, 0, 1), angleRad);
 		}
 
-		FlipXs[index] = (byte)(velocity.x < -0.01f ? 0 : 1);
+		// Salva de volta — GARANTE consistência para o próximo frame
 		NewVelocities[index] = velocity;
 	}
 }

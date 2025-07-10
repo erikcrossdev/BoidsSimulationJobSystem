@@ -32,6 +32,7 @@ public class BoidsSpawnerAndBehaviour : MonoBehaviour
 	[SerializeField] private float _cohesionWeight = 1f;
 	[SerializeField] private float _playerEffectWeight = 0.8f;
 
+	private NativeArray<byte> _flipXs; //flip sprite or not
 	public float CenterPullWeight => _centerPullWeight;
 	public bool ShouldAvoidPlayer => _shouldAvoidPlayer;
 	public float MoveSpeed => _moveSpeed;
@@ -82,11 +83,23 @@ public class BoidsSpawnerAndBehaviour : MonoBehaviour
 		_centerPullWeight = param;
 	}
 
+	private void GetCameraBounds() {
+		Camera cam = Camera.main;
+		float camHeight = 2f * cam.orthographicSize;
+		float camWidth = camHeight * cam.aspect;
+
+		boundsMin = new Vector2(-camWidth / 2f, -camHeight / 2f);
+		boundsMax = new Vector2(camWidth / 2f, camHeight / 2f);
+	}
+
 	void Start()
 	{
 		_playerPosition = PlayerBehaviour.instance.transform;
+		GetCameraBounds();
 		Transform[] transforms = new Transform[_numberOfBoidsToSpawn];
 		_spriteRenderers = new SpriteRenderer[_numberOfBoidsToSpawn];
+
+		_flipXs = new NativeArray<byte>(_numberOfBoidsToSpawn, Allocator.Persistent);
 		_positions = new NativeArray<float3>(_numberOfBoidsToSpawn, Allocator.Persistent);
 		_velocities = new NativeArray<float3>(_numberOfBoidsToSpawn, Allocator.Persistent);
 		_newVelocities = new NativeArray<float3>(_numberOfBoidsToSpawn, Allocator.Persistent);
@@ -134,7 +147,8 @@ public class BoidsSpawnerAndBehaviour : MonoBehaviour
 				(boundsMin.x + boundsMax.x) / 2f,
 				(boundsMin.y + boundsMax.y) / 2f,
 				0f),
-			CenterPullWeight = _centerPullWeight
+			CenterPullWeight = _centerPullWeight,
+			MaxNeighbors = 15
 		};
 
 		JobHandle behaviorHandle = behaviorJob.Schedule(_numberOfBoidsToSpawn, 64);
@@ -147,7 +161,8 @@ public class BoidsSpawnerAndBehaviour : MonoBehaviour
 			MinX = boundsMin.x,
 			MaxX = boundsMax.x,
 			MinY = boundsMin.y,
-			MaxY = boundsMax.y
+			MaxY = boundsMax.y,
+			FlipXs = _flipXs
 		};
 
 		JobHandle moveHandle = moveJob.Schedule(_accessArray, behaviorHandle);
@@ -157,11 +172,9 @@ public class BoidsSpawnerAndBehaviour : MonoBehaviour
 		// flip boid sprite
 		for (int i = 0; i < _spriteRenderers.Length; i++)
 		{
-			float velX = _newVelocities[i].x;
-			if (velX < 0)
-			{
-				_spriteRenderers[i].flipX = velX < 0;
-			}
+			bool shouldFlip = _flipXs[i] != 0;
+			if (_spriteRenderers[i].flipX != shouldFlip)
+				_spriteRenderers[i].flipX = shouldFlip;
 		}
 
 		// copy new velocities for the next frame
@@ -174,6 +187,7 @@ public class BoidsSpawnerAndBehaviour : MonoBehaviour
 		if (_positions.IsCreated) _positions.Dispose();
 		if (_velocities.IsCreated) _velocities.Dispose();
 		if (_newVelocities.IsCreated) _newVelocities.Dispose();
+		if (_flipXs.IsCreated) _flipXs.Dispose();
 	}
 }
 [BurstCompile]
@@ -186,6 +200,7 @@ public struct BoidBehaviorJob : IJobParallelFor
 	[ReadOnly] public bool AvoidPlayer; // true = run, false = follow
 	[ReadOnly] public float3 BoundsCenter;
 	[ReadOnly] public float CenterPullWeight;
+	[ReadOnly] public int MaxNeighbors;
 
 	public NativeArray<float3> NewVelocities;
 
@@ -208,26 +223,36 @@ public struct BoidBehaviorJob : IJobParallelFor
 		int neighborCount = 0;
 
 		float3 playerDir = PlayerPos - currentPos;
-		playerDir = math.normalize(playerDir);
+		if (math.lengthsq(playerDir) > 0)
+			playerDir = math.normalize(playerDir);
+		else
+			playerDir = float3.zero;
 		if (AvoidPlayer)
 		{
 			playerDir = -playerDir; // direction to run
 		}
 
+		float NeighborDistanceSquared = NeighborDistance * NeighborDistance; //use this to avoid multiplying on the loop
 		for (int i = 0; i < Positions.Length; i++)
 		{
 			if (i == index) continue;
 
 			float3 otherPos = Positions[i];
-			float dist = math.distance(currentPos, otherPos);
+			float3 offset = currentPos - otherPos;
+			float distSqr = math.lengthsq(offset);
 
-			if (dist < NeighborDistance && dist > 0)
+			if (distSqr < NeighborDistanceSquared && distSqr > 0)
 			{
-				separation += (currentPos - otherPos) / dist;
+				float invDist = math.rsqrt(distSqr);
+				separation += offset * invDist;
 				alignment += Velocities[i];
 				cohesion += otherPos;
 				neighborCount++;
+
+				if (neighborCount >= MaxNeighbors)
+					break;
 			}
+
 		}
 
 		if (neighborCount > 0)
@@ -261,29 +286,41 @@ public struct BoidMoveJob : IJobParallelForTransform
 	[ReadOnly] public float MaxX;
 	[ReadOnly] public float MinY;
 	[ReadOnly] public float MaxY;
-
+	public NativeArray<byte> FlipXs;
 
 	public void Execute(int index, TransformAccess transform)
 	{
-		float safeMinX = MinX + 1f;
-		float safeMaxX = MaxX - 1f;
-		float safeMinY = MinY + 1f;
-		float safeMaxY = MaxY - 1f;
+		float margin = 0.2f;
+		float safeMinX = MinX + margin;
+		float safeMaxX = MaxX - margin;
+		float safeMinY = MinY + margin;
+		float safeMaxY = MaxY - margin;
 
 		float3 velocity = NewVelocities[index];
 		float3 newPos = (float3)transform.position + velocity * DeltaTime;
 
 
-		if (newPos.x < safeMinX || newPos.x > safeMaxX)
+		if (newPos.x < safeMinX)
 		{
-			velocity.x *= -1;
-			newPos.x = math.clamp(newPos.x, MinX, MaxX);
+			newPos.x = safeMinX;
+			if (velocity.x < 0) velocity.x *= -1;
 		}
 
-		if (newPos.y < safeMinY || newPos.y > safeMaxY)
+		if (newPos.x > safeMaxX)
 		{
-			velocity.y *= -1;
-			newPos.y = math.clamp(newPos.y, MinY, MaxY);
+			newPos.x = safeMaxX;
+			if (velocity.x > 0) velocity.x *= -1;
+		}
+		if (newPos.y < safeMinY)
+		{
+			newPos.y = safeMinY;
+			if (velocity.y < 0) velocity.y *= -1;
+		}
+
+		if (newPos.y > safeMaxY)
+		{
+			newPos.y = safeMaxY;
+			if (velocity.y > 0) velocity.y *= -1;
 		}
 
 		transform.position = newPos;
@@ -294,6 +331,7 @@ public struct BoidMoveJob : IJobParallelForTransform
 			transform.rotation = quaternion.AxisAngle(new float3(0, 0, 1), angle);
 		}
 
+		FlipXs[index] = (byte)(velocity.x < -0.01f ? 0 : 1);
 		NewVelocities[index] = velocity;
 	}
 }

@@ -3007,7 +3007,7 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: 
   _boidPrefab: {fileID: 4227031460508257049, guid: 6fbd21ce8038dd94dbd19ce515c47ff6, type: 3}
-  _numberOfBoidsToSpawn: 1500
+  _numberOfBoidsToSpawn: 3000
   _spawnRadius: 15
   _sprites:
   - {fileID: 6382002771724669333, guid: 1e95dc802aba75a479a796d63b271f86, type: 3}
